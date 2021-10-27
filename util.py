@@ -39,6 +39,7 @@ def fwd_gradients(Y, x):
     return Y_x
 
 
+
 class neural_net(object):
     def __init__(self, *inputs, layers):
 
@@ -92,6 +93,105 @@ class neural_net(object):
         print("from neural net: ", len(Y))
         print("y from neural net: ", Y)
         #multiple
+        return Y
+
+# in util.py
+class neural_net_special(object):
+
+    # def __init__(self, in_x, in_y, in_t, layers):
+    def __init__(self, *inputs, layers):
+
+        self.layers = [3] + layers[1:-1] + [4]  # a fixed architecture, inputs are x,y,t, outputs are cicb, konkoff
+        self.num_layers = len(self.layers)
+
+        if len(inputs) == 0:
+            in_dim = self.layers[0]
+            self.X_mean = np.zeros([1, in_dim])
+            self.X_std = np.ones([1, in_dim])
+        else:
+            X = np.concatenate(inputs, 1)
+            self.X_mean = X.mean(0, keepdims=True)
+            self.X_std = X.std(0, keepdims=True)
+
+        self.weights = []
+        self.biases = []
+        self.gammas = []
+        # self.weights[:self.num_layers - 1] weights for the first net,
+        # self.weights[self.num_layers - 1:] weights for the second net
+
+        for i in range(2):  # we have two sub-nets
+            # two sub-nets have same architecture only differs in the input_dim, 2 for xy-sub-net, 1 for t-sub-net
+            sub_layers = [2 if i == 0 else 1] + self.layers[1:-1] + [2]
+            name_scope = 'KonKoff' if i == 0 else 'CiCb'
+            with tf.variable_scope(name_scope):  # this is to separate the name for kon, koff and ci, cb
+                for l in range(0, self.num_layers - 1):
+                    in_dim = sub_layers[l]
+                    out_dim = sub_layers[l + 1]
+
+                    if i > 0 and l == 1:  # to concat features
+                        in_dim += sub_layers[-2]
+
+                    W = np.random.normal(size=[in_dim, out_dim])
+                    b = np.zeros([1, out_dim])
+                    g = np.ones([1, out_dim])
+                    # tensorflow variables
+                    self.weights.append(tf.Variable(W, dtype=tf.float32, trainable=True))
+                    self.biases.append(tf.Variable(b, dtype=tf.float32, trainable=True))
+                    self.gammas.append(tf.Variable(g, dtype=tf.float32, trainable=True))
+
+    def __call__(self, *inputs):
+
+        H = (tf.concat(inputs, 1) - self.X_mean) / self.X_std
+        H_xy, H_t = tf.split(H, [2, 1], axis=1)
+
+        H = H_xy
+
+        for l in range(0, self.num_layers - 1):
+            W = self.weights[l]
+            b = self.biases[l]
+            g = self.gammas[l]
+            # weight normalization
+            V = W / tf.norm(W, axis=0, keepdims=True)
+            # matrix multiplication
+            H = tf.matmul(H, V)
+            # add bias
+            H = g * H + b
+            # activation
+            if l < self.num_layers - 2:
+                H = H * tf.sigmoid(H)
+            # save the feature
+            if l == self.num_layers - 3:
+                xy_feature = H
+
+        xy_output = H
+        H = H_t
+
+        for l in range(0, self.num_layers - 1):
+            W = self.weights[l + self.num_layers - 1]
+            b = self.biases[l + self.num_layers - 1]
+            g = self.gammas[l + self.num_layers - 1]
+            # weight normalization
+            V = W / tf.norm(W, axis=0, keepdims=True)
+            # matrix multiplication
+            H = tf.matmul(H, V)
+            # add bias
+            H = g * H + b
+            # activation
+            if l < self.num_layers - 2:
+                H = H * tf.sigmoid(H)
+            # read the feature
+            if l == 0:
+                H = tf.concat([xy_feature, H], axis=1)
+
+        xyt_output = H
+        H = tf.concat([xy_output, xyt_output], axis=1)
+
+        Y = tf.split(H, num_or_size_splits=H.shape[1], axis=1)
+        # Y= Y*[1.0, 0.01]
+        # here, I think you still need to apply a scaling
+        print("from neural net: ", len(Y))
+        print("y from neural net: ", Y)
+        # multiple
         return Y
 
 class neural_net_k(object):
@@ -280,11 +380,80 @@ def PCA_2D(Ci, Cb, t, x, y, kon, koff, R0, D, Lv, Cv, SV):
     # =============================================================================
     e1 = koff * Cb + D * (Ci_xx + Ci_yy) - Ci * Ci_t - kon * Ci * (R0 - Cb) + R0 * (Ci_x + Ci_y) + Lv * (Cv - Ci) * SV
     e2 = kon * Ci * (R0 - Cb) - Cb * Cb_t - koff * Cb
-    e3 = kon - 1000*koff
+    #e3 = kon - 1000*koff
+    # =============================================================================
+
+    return e1, e2
+
+
+def PCA_special(kon, koff, Ci, Cb, x, y, t, R0, D, Lv, Cv, SV):
+    # it is fine to use PCA_2D, but we actually don't need Cb_x, Cb_y or Cb_xx, Cb_yy, so this version is simplified.
+    Y = tf.concat([Ci, Cb], 1)
+    Y_t = fwd_gradients(Y, t)
+
+    Y_x = fwd_gradients(Y, x)
+    Y_y = fwd_gradients(Y, y)
+    Y_xx = fwd_gradients(Y_x, x)
+    Y_yy = fwd_gradients(Y_y, y)
+
+    # =============================================================================
+    Ci = Y[:, 0:1]
+    Cb = Y[:, 1:2]
+
+    Ci_t = Y_t[:, 0:1]
+    Cb_t = Y_t[:, 1:2]
+
+    Ci_x = fwd_gradients(Ci, x)
+    Ci_y = fwd_gradients(Ci, y)
+    Ci_xx = fwd_gradients(Ci_x, x)
+    Ci_yy = fwd_gradients(Ci_y, y)
+    # =============================================================================
+
+    # =============================================================================
+    e1 = koff * Cb + D * (Ci_xx + Ci_yy) - Ci * Ci_t - kon * Ci * (R0 - Cb) + R0 * (Ci_x + Ci_y) + Lv * (Cv - Ci) * SV
+    e2 = kon * Ci * (R0 - Cb) - Cb * Cb_t - koff * Cb
+    e3 = kon - 1000 * koff
     # =============================================================================
 
     return e1, e2, e3
 
+
+def PCA_2D_1(kon, koff, t, x, y, Ci, Cb, R0, D, Lv, Cv, SV):
+    Y = tf.concat([Ci, Cb], 1)
+
+    Y_t = fwd_gradients(Y, t)
+    Y_x = fwd_gradients(Y, x)
+    Y_y = fwd_gradients(Y, y)
+    Y_xx = fwd_gradients(Y_x, x)
+    Y_yy = fwd_gradients(Y_y, y)
+
+    # =============================================================================
+    Ci = Y[:, 0:1]
+    Cb = Y[:, 1:2]
+
+    Ci_t = Y_t[:, 0:1]
+    Cb_t = Y_t[:, 1:2]
+
+    Ci_x = Y_x[:, 0:1]
+    Cb_x = Y_x[:, 1:2]
+
+    Ci_y = Y_y[:, 0:1]
+    Cb_y = Y_y[:, 1:2]
+
+    Ci_xx = Y_xx[:, 0:1]
+    Cb_xx = Y_xx[:, 1:2]
+
+    Ci_yy = Y_yy[:, 0:1]
+    Cb_yy = Y_yy[:, 1:2]
+    # =============================================================================
+
+    # =============================================================================
+    e1 = koff * Cb + D * (Ci_xx + Ci_yy) - Ci * Ci_t - kon * Ci * (R0 - Cb) + R0 * (Ci_x + Ci_y) + Lv * (Cv - Ci) * SV
+    e2 = kon * Ci * (R0 - Cb) - Cb * Cb_t - koff * Cb
+    e3 = kon - 1000*koff
+    # =============================================================================
+
+    return e1, e2, e3
 
 def Gradient_Velocity_2D(u, v, x, y):
     Y = tf.concat([u, v], 1)

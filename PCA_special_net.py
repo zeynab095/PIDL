@@ -14,7 +14,7 @@ import numpy as np
 import time
 import sys
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from util import neural_net, neural_net_k, Navier_Stokes_2D, PCA_2D, \
+from util import neural_net_special, PCA_special, \
     tf_session, mean_squared_error, relative_error
 
 def get_existing_from_ckpt(ckpt, var_list=None, rest_zero=False, print_level=1):
@@ -55,7 +55,7 @@ class HFM(object):
     def __init__(self, t_data, x_data, y_data, Ci_data, Cb_data,
                  t_eqns, x_eqns, y_eqns,
                  layers, batch_size,
-                 kon, koff, R0, D, Lv, Cv, SV):
+                 kon, koff, R0, D, Lv, Cv, SV, kon_mean, koff_mean):
 
         # specs
         self.layers = layers
@@ -64,6 +64,8 @@ class HFM(object):
         # flow properties
         self.kon = kon
         self.koff = koff
+        self.kon_mean = kon_mean
+        self.koff_mean = koff_mean
         self.R0 = R0
         self.D = D
         self.Lv = Lv
@@ -80,93 +82,40 @@ class HFM(object):
         [self.t_eqns_tf, self.x_eqns_tf, self.y_eqns_tf] = [tf.compat.v1.placeholder(tf.float32, shape=[None, 1]) for _
                                                             in range(3)]
 
-        with tf.variable_scope('konkoff'):
-            layersk = [2] + 10 * [4 * 10] + [2]
-            self.net_cuvp_k = neural_net_k(self.x_data, self.y_data, layers=layersk)
-            [self.kon_data_pred, self.koff_data_pred] = self.net_cuvp_k(self.x_data_tf,
-                                                                       self.y_data_tf
-                                                                       )
-        # self.kon_predf = self.kon_data_pred*alpha + kon_const
-        # self.kon_predf = self.koff_data_pred * alpha + kon_const
-        #
-        with tf.variable_scope('CiCb'):
-            self.net_cuvp = neural_net(self.t_data, self.x_data, self.y_data, self.kon_data, self.koff_data,
-                                       layers=self.layers)
-            [self.Ci_data_pred, self.Cb_data_pred, *d1] = self.net_cuvp(self.t_data_tf,
-                                                                        self.x_data_tf,
-                                                                        self.y_data_tf,
-                                                                        self.kon_data_pred,
-                                        self.koff_data_pred)
+        self.net_cuvp = neural_net_special(self.x_data, self.y_data, self.t_data, layers=self.layers)
+        [self.Kon_data_pred, self.Koff_data_pred, \
+         self.Ci_data_pred, self.Cb_data_pred] = self.net_cuvp(self.x_data_tf,
+                                                               self.y_data_tf,
+                                                               self.t_data_tf)
+        [self.Kon_eqns_pred, self.Koff_eqns_pred, \
+         self.Ci_eqns_pred, self.Cb_eqns_pred] = self.net_cuvp(self.x_eqns_tf,
+                                                               self.y_eqns_tf,
+                                                               self.t_eqns_tf)
 
+        [self.e1_eqns_pred, self.e2_eqns_pred, self.e3_eqns_pred] = \
+            PCA_special(self.Kon_eqns_pred, self.Koff_eqns_pred,
+                        self.Ci_eqns_pred, self.Cb_eqns_pred,
+                        self.x_eqns_tf,
+                        self.y_eqns_tf,
+                        self.t_eqns_tf,
+                        self.R0,
+                        self.D,
+                        self.Lv,
+                        self.Cv,
+                        self.SV)
 
-
-            [self.Ci_eqns_pred,
-             self.Cb_eqns_pred] = self.net_cuvp(self.t_eqns_tf,
-                                                self.x_eqns_tf,
-                                                self.y_eqns_tf,
-                                                self.kon_data_pred,
-                                                self.koff_data_pred
-                                                )
-
-            [self.e1_eqns_pred,
-             self.e2_eqns_pred, self.e3_eqns_pred] = PCA_2D(self.Ci_eqns_pred,
-                                         self.Cb_eqns_pred,
-                                         self.t_eqns_tf,
-                                         self.x_eqns_tf,
-                                         self.y_eqns_tf,
-                                         self.kon_data_pred,
-                                         self.koff_data_pred,
-                                         self.R0,
-                                         self.D,
-                                         self.Lv,
-                                         self.Cv,
-                                         self.SV)
-
-        # print("eq1 loss: ", self.e1_eqns_pred)
-        # print("eq2 loss: ", self.e2_eqns_pred)
-
-        self.loss = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf)
-
-
-
-        self.loss1 = mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                   mean_squared_error(self.e2_eqns_pred, 0.0) + \
-                     mean_squared_error(self.e3_eqns_pred, 0.0)
-
-        self.loss2 = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf) + \
-                    1000 * mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                    1000 * mean_squared_error(self.e2_eqns_pred, 0.0) + \
-                    1000 * mean_squared_error(self.e3_eqns_pred, 0.0)
-
-        self.loss3 = mean_squared_error(self.kon_data_pred, self.kon_data_tf) + \
-                     mean_squared_error(self.koff_data_pred, self.koff_data_tf)
-
-        self.loss4 = mean_squared_error(self.Ci_data_pred, self.Ci_data_tf) + \
-                    mean_squared_error(self.Cb_data_pred, self.Cb_data_tf)
-
-            # optimizers
+        self.loss = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf) + \
+                    mean_squared_error(self.e1_eqns_pred, 0.0) + mean_squared_error(self.e2_eqns_pred, 0.0) + \
+                    mean_squared_error(self.e3_eqns_pred, 0.0) + \
+                    mean_squared_error(self.Kon_data_pred, kon_mean) * 0.1 + mean_squared_error(self.Koff_data_pred,
+                                                                                                koff_mean) * 0.1
 
         self.learning_rate = tf.compat.v1.placeholder(tf.float32, shape=[])
 
-        gen_loss = self.loss
-        fnet_loss = self.loss1
-
-
         print("learnin rate: ", self.learning_rate)
-        # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        # self.train_op = self.optimizer.minimize(self.loss2)
-        gen_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        fnet_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        gen_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='CiCb')
-        fnet_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='konkoff')
-        print("fnet----------------------",len(fnet_tvars))
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+        self.train_op = self.optimizer.minimize(self.loss)
 
-        gen_grads_and_vars = gen_optimizer.compute_gradients(gen_loss, gen_tvars)
-        fnet_grads_and_vars = fnet_optimizer.compute_gradients(fnet_loss, fnet_tvars)
-
-        gen_train = gen_optimizer.apply_gradients(gen_grads_and_vars)
-        fnet_train = fnet_optimizer.apply_gradients(fnet_grads_and_vars)
-        self.train_op = tf.group(gen_train, fnet_train)
         self.sess = tf_session()
 
     def train(self, total_time, learning_rate, alpha):
@@ -177,8 +126,8 @@ class HFM(object):
         start_time = time.time()
         running_time = 0
         it = 0
-        abc = get_existing_from_ckpt('models/model_eq_C', print_level=2)
-        self.sess.run(abc)
+        # abc = get_existing_from_ckpt('models/model_eq_C_08', print_level=2)
+        # self.sess.run(abc)
 
         while running_time < total_time:
 
@@ -226,11 +175,11 @@ class HFM(object):
             if it % 10 == 0:
                 elapsed = time.time() - start_time
                 running_time += elapsed / 3600.0
-                [loss_value, loss_value_1, loss_value_2, loss_value_3, loss_value_4,
-                 learning_rate_value] = self.sess.run([self.loss, self.loss1, self.loss2, self.loss3, self.loss4,
+                [loss_value,
+                 learning_rate_value] = self.sess.run([self.loss,
                                                        self.learning_rate], tf_dict)
-                print('It: %d, Loss: %.3e, Loss eq: %.3e, Loss all: %.3e, Loss kon/koff: %.3e, Loss Ci/Cb: %.3e,Time: %.2fs, Running Time: %.2fh, Learning Rate: %.1e'
-                      % (it, loss_value, loss_value_1, loss_value_2, loss_value_3, loss_value_4, elapsed, running_time, learning_rate_value))
+                print('It: %d, Loss: %.3e,Time: %.2fs, Running Time: %.2fh, Learning Rate: %.1e'
+                      % (it, loss_value, elapsed, running_time, learning_rate_value))
                 sys.stdout.flush()
                 start_time = time.time()
             it += 1
@@ -240,26 +189,23 @@ class HFM(object):
         # model_var_list = tf.get_collection(tfflag, scope='generator') + tf.get_collection(tfflag, scope='fnet')
         # assign_ops = get_existing_from_ckpt(FLAGS.checkpoint, model_var_list, rest_zero=True, print_level=1)
         #saver = tf.train.import_meta_graph('models/my-model15.meta')
-        abc = get_existing_from_ckpt('models/model_eq_C', print_level=2)
-        self.sess.run(abc)
+        abc = get_existing_from_ckpt('models/model_eq_C_08', print_level=2)
+        #self.sess.run(abc)
 
     def predict(self, t_star, x_star, y_star):
 
-        tf_dict_k = {self.x_data_tf: x_star, self.y_data_tf: y_star}
-        kon_star = self.sess.run(self.kon_data_pred, tf_dict_k)
-        koff_star = self.sess.run(self.koff_data_pred, tf_dict_k)
-
-        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star, self.kon_data_tf: kon_star,
-                   self.koff_data_tf: koff_star}
+        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star}
 
         Ci_star = self.sess.run(self.Ci_data_pred, tf_dict)
         Cb_star = self.sess.run(self.Cb_data_pred, tf_dict)
+        kon_star = self.sess.run(self.Kon_data_pred, tf_dict)
+        koff_star = self.sess.run(self.Koff_data_pred, tf_dict)
 
         return Ci_star, Cb_star, kon_star, koff_star
 
 
 
-def start_train():
+def start_train1():
     batch_size = 40000
 
     layers = [5] + 20 * [4 * 50] + [2]
@@ -287,6 +233,9 @@ def start_train():
 
     kon = np.full((nx, ny), 7.7 * 10 ** -1)
     kon[mask] = 7.7
+
+    kon_mean = 4.62
+    koff_mean = 0.004235
 
     koff = np.full((nx, ny), 7.7 * 10 ** -4)
     koff[mask] = 7.7 * 10 ** -3
@@ -328,14 +277,16 @@ def start_train():
     alpha = 0.0
 
 
+
+
         # Training
     model = HFM(t_data, x_data, y_data, Ci_data, Cb_data,
                 t_eqns, x_eqns, y_eqns,
                 layers, batch_size,
-                kon_train, koff_train, R0, D, Lv, Cv, SV)
+                kon_train, koff_train, R0, D, Lv, Cv, SV, kon_mean, koff_mean)
     #model.restore()
     # # =============================================================================
-    model.train(total_time=0.4, learning_rate=1e-3, alpha=0)
+    model.train(total_time=0.5, learning_rate=1e-3, alpha=0)
     # # =============================================================================
     time_steps_test = 600
     time_interval_test = 50
