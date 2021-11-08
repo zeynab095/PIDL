@@ -44,10 +44,14 @@ Cb0 = np.zeros((nx, ny))
 Cb = Cb0.copy()
 
 SV = np.ones((nx, ny))
-
+#
 SV[:, 0:int(ny / 2)] = 0.1
 
 SV[:, int(ny / 2):ny] = 0.6
+
+#R0 = 4.089 * 10 ** -1
+# SV = 0.35
+
 
 
 center_x = nx/2
@@ -55,22 +59,31 @@ center_y = ny/2
 radius = 50
 y,x = np.ogrid[-center_x:nx-center_x, -center_y:ny-center_y]
 mask = x*x + y*y <= radius*radius
-
 kon = np.full((nx, ny), 7.7 * 10 ** -1)
 kon[mask] = 7.7
 
 koff = np.full((nx, ny), 7.7 * 10 ** -4)
 koff[mask] = 7.7 * 10 ** -3
 
+# kon = np.ones((nx, ny))
+# koff = np.ones((nx, ny))
+# kon[0:int(nx / 2), :] = 0.14
+#
+# kon[int(nx / 2):nx, :] = 1.4
+# #
+# koff[0:int(nx / 2), :] = 1.4 * 10 ** -4
+#
+# koff[int(nx / 2):nx, :] = 1.4 * 10 ** -3
+
 # fig, (ax1, ax2) = plt.subplots(1, 2)
 # ax1.imshow(kon, cmap=plt.get_cmap('hot'))
 # ax2.imshow(koff, cmap=plt.get_cmap('hot'))
 # plt.show()
 
-#kon = 7.7 * 10 ** -1
-
-
-#koff = 7.7 * 10 ** -4
+# kon = 7.7 * 10 ** -1
+#
+#
+# koff = 7.7 * 10 ** -4
 
 
 # Initial conditions - circle of radius r centred at (cx,cy) (mm)
@@ -101,8 +114,7 @@ def do_timestep(u0, u, t0, Cb0, Cb):
                                  + (u0[1:-1, 2:] - 2 * u0[1:-1, 1:-1] + u0[1:-1, :-2]) / dy2)
 
                      + dt * Lv * SV[1:-1, 1:-1] * (Cv) + koff[1:-1, 1:-1] * dt * Cb0[1:-1, 1:-1]) / (1. + dt * Lv * SV[1:-1, 1:-1]
-                                                                                         + dt * kon[1:-1, 1:-1] * (R0[1:-1,
-                                                                                                       1:-1] - Cb0[1:-1,
+                                                                                         + dt * kon[1:-1, 1:-1] * (R0[1:-1, 1:-1] - Cb0[1:-1,
                                                                                                                1:-1]))
 
     Cb[1:-1, 1:-1] = Cb0[1:-1, 1:-1] - dt * koff[1:-1, 1:-1] * Cb0[1:-1, 1:-1] + dt * kon[1:-1, 1:-1] * u[1:-1, 1:-1] * (
@@ -135,9 +147,20 @@ def get_data(nsteps, ninterval, u0, u, t0, Cb0, Cb, visualize=False):
             k += 1
             if visualize == True:
                 fig, ax = plt.subplots(1, 2)
-                ax[0].imshow(u.copy(), cmap=plt.get_cmap('hot'), vmin=Tcool, vmax=Thot)
-                ax[1].imshow(Cb.copy(), cmap=plt.get_cmap('hot'), vmin=Tcool, vmax=Thot)
-                ax[0].set_title('{:.1f} ms'.format(m))
+                im = ax[0].imshow(u.copy(), cmap=plt.get_cmap('bwr'), vmin=0, vmax=0.05)
+                im1 = ax[1].imshow(Cb.copy(), cmap=plt.get_cmap('bwr'), vmin=0, vmax=0.5)
+                ax[0].set_title('{:.1f} mss'.format(m))
+
+                divider = make_axes_locatable(ax[0])
+                cax = divider.append_axes("right", size="5%", pad=0.1)
+                fig.colorbar(im, cax=cax)
+
+                divider1 = make_axes_locatable(ax[1])
+                cax1 = divider1.append_axes("right", size="5%", pad=0.1)
+                fig.colorbar(im1, cax=cax1)
+
+                ax[0].set_axis_off()
+                ax[1].set_axis_off()
             plt.show()
             time_array = np.full((40000, 1), t0)
             single_time = np.column_stack((coordinate_grid[0].reshape(40000, 1), coordinate_grid[1].reshape(40000, 1),

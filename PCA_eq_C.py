@@ -15,7 +15,7 @@ import time
 import sys
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from util import neural_net, neural_net_k, Navier_Stokes_2D, PCA_2D, \
-    tf_session, mean_squared_error, relative_error
+    tf_session, mean_squared_error, relative_error, mean_abs_error
 
 def get_existing_from_ckpt(ckpt, var_list=None, rest_zero=False, print_level=1):
     reader = tf.train.load_checkpoint(ckpt)
@@ -80,25 +80,22 @@ class HFM(object):
 
 
         with tf.variable_scope('CiCb'):
-            self.net_cuvp = neural_net(self.t_data, self.x_data, self.y_data, self.kon_data, self.koff_data,
+            self.net_cuvp = neural_net(self.t_data, self.x_data, self.y_data,
                                        layers=self.layers)
 
             [self.Ci_data_pred, self.Cb_data_pred, *d1] = self.net_cuvp(self.t_data_tf,
                                                                         self.x_data_tf,
-                                                                        self.y_data_tf,
-                                                                        self.kon_data_tf,
-                                                                        self.koff_data_tf)
+                                                                        self.y_data_tf)
 
             [self.Ci_eqns_pred,
              self.Cb_eqns_pred] = self.net_cuvp(self.t_eqns_tf,
                                                 self.x_eqns_tf,
-                                                self.y_eqns_tf,
-                                                self.kon_data_tf,
-                                                self.koff_data_tf
+                                                self.y_eqns_tf
                                                 )
 
             [self.e1_eqns_pred,
-             self.e2_eqns_pred ] = PCA_2D(self.Ci_eqns_pred,
+             self.e2_eqns_pred,
+             self.e3_eqns_pred] = PCA_2D(self.Ci_eqns_pred,
                                          self.Cb_eqns_pred,
                                          self.t_eqns_tf,
                                          self.x_eqns_tf,
@@ -111,22 +108,23 @@ class HFM(object):
                                          self.Cv,
                                          self.SV)
 
+        self.loss_Ci = relative_error(self.Ci_data_pred, self.Ci_data_tf)
+        self.loss_Cb = relative_error(self.Cb_data_pred, self.Cb_data_tf)
+        self.loss_eq = mean_squared_error(self.e1_eqns_pred, 0.0) + \
+                       mean_squared_error(self.e2_eqns_pred, 0.0)
 
 
+        self.loss = self.loss_Ci + \
+                    self.loss_Cb
 
-        self.loss = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf) + \
-                    mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                    mean_squared_error(self.e2_eqns_pred, 0.0)
 
-        self.loss_eq =  mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                      mean_squared_error(self.e2_eqns_pred, 0.0)
+        self.loss_CiCb = relative_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf)
 
-        self.loss_CiCb = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf)
+        self.loss_Ci = relative_error(self.Ci_data_pred, self.Ci_data_tf)
+        self.loss_Cb = relative_error(self.Cb_data_pred, self.Cb_data_tf)
+        self.loss_Ci_Cb = self.loss_Ci + self.loss_Cb
 
-        self.loss_Ci = mean_squared_error(self.Ci_data_pred, self.Ci_data_tf)
-        self.loss_Cb = mean_squared_error(self.Cb_data_pred, self.Cb_data_tf)
-
-            # optimizers
+        # optimizers
         self.learning_rate = tf.compat.v1.placeholder(tf.float32, shape=[])
         self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
         self.train_op = self.optimizer.minimize(self.loss)
@@ -143,6 +141,11 @@ class HFM(object):
         start_time = time.time()
         running_time = 0
         it = 0
+        losses = []
+        losses_CiCb = []
+        losses_eq = []
+        epochs = []
+
         while running_time < total_time:
 
             idx_data = np.random.choice(N_data, min(self.batch_size, N_data))
@@ -183,8 +186,8 @@ class HFM(object):
                        self.learning_rate: learning_rate}
 
             self.sess.run([self.train_op], tf_dict)
-            if it % 1000 == 0:
-                saver.save(self.sess, "models/model_eq_C_08")
+            if it % 100 == 0:
+                saver.save(self.sess, "models_test/model_eq_C2")
                 print("Saving model.............................")
 
             # Print
@@ -194,6 +197,10 @@ class HFM(object):
                 [loss_value, loss_value_eq, loss_value_CiCb, loss_value_Ci, loss_value_Cb,
                  learning_rate_value] = self.sess.run([self.loss, self.loss_eq, self.loss_CiCb, self.loss_Ci,
                                                        self.loss_Cb, self.learning_rate], tf_dict)
+                epochs.append(it)
+                losses.append(loss_value)
+                losses_eq.append(loss_value_eq)
+                losses_CiCb.append(loss_value_CiCb)
 
                 print('Pca_eq_C It: %d, Loss all: %.3e, Loss eq: %.3e, Loss Ci+Cb: %.3e, Loss Ci: %.3e, Loss Cb: %.3e,Time: %.2fs, Running Time: %.2fh, Learning Rate: %.1e'
                       % (it, loss_value, loss_value_eq, loss_value_CiCb, loss_value_Ci, loss_value_Cb, elapsed, running_time, learning_rate_value))
@@ -202,14 +209,32 @@ class HFM(object):
             it += 1
 
 
+        plt.plot(epochs, losses, label="all loss")
+        plt.legend(loc="upper right")
+        plt.xlabel('epochs')
+        plt.ylabel('loss')
+        plt.show()
+
+        plt.plot(epochs, losses_eq, label="loss eq")
+        plt.legend(loc="upper right")
+        plt.xlabel('epochs')
+        plt.ylabel('loss')
+        plt.show()
+
+        plt.plot(epochs, losses_CiCb, label="loss CiCb")
+        plt.legend(loc="upper right")
+        plt.xlabel('epochs')
+        plt.ylabel('loss')
+        plt.show()
+
+
 
     def restore(self):
-        abc = get_existing_from_ckpt('models/model_eq_C', print_level=2)
+        abc = get_existing_from_ckpt('models_test/model_eq_C2', print_level=2)
         self.sess.run(abc)
 
     def predict(self, t_star, x_star, y_star, kon_star, koff_star):
-        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star, self.kon_data_tf: kon_star,
-                   self.koff_data_tf: koff_star}
+        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star}
 
         Ci_star = self.sess.run(self.Ci_data_pred, tf_dict)
         Cb_star = self.sess.run(self.Cb_data_pred, tf_dict)
@@ -221,7 +246,7 @@ class HFM(object):
 def start_train():
     batch_size = 40000
 
-    layers = [5] + 20 * [4 * 50] + [2]
+    layers = [3] + 20 * [4 * 50] + [2]
     Tcool, Thot = 0, 1
     w = h = 2
     dx = dy = 0.01
@@ -319,11 +344,11 @@ def start_train():
     print("ci test min: ", Ci_test.min())
     print("ci data min: ", Ci_data.min())
 
-    print("kon data max: ", kon_data_test.max())
-    print("kon data min: ", kon_data_test.min())
+    # print("kon data max: ", kon_data_test.max())
+    # print("kon data min: ", kon_data_test.min())
 
-    print("koff data max: ", koff_data_test.max())
-    print("koff data min: ", koff_data_test.min())
+    # print("koff data max: ", koff_data_test.max())
+    # print("koff data min: ", koff_data_test.min())
 
     test_n = int(time_steps_test / time_interval_test)
     kon_test = np.tile(kon, test_n).flatten(order='F').reshape(num_items_test, 1)
@@ -346,58 +371,143 @@ def start_train():
     # #
     error_Ci_mean = mean_squared_error(Ci_pred, Ci_test)
     error_Cb_mean = mean_squared_error(Cb_pred, Cb_test)
+    error_CiCb_mean = mean_squared_error(Ci_pred+Cb_pred, Ci_test+Cb_test)
     # #
     # # #
     # #
     print('Error mean squared Ci: %e' % (error_Ci_mean))
     print('Error mean suqared Cb: %e' % (error_Cb_mean))
+    print('Error mean suqared CiCb: %e' % (error_CiCb_mean))
 
-    Ci_max = Ci_test.max()+0.2
-    Cb_max = Cb_test.max()+0.2
+    Ci_max = Ci_test.max()+0.1
+    Cb_max = Cb_test.max()+0.1
 
 
     for i in range(test_n):
         j = i * 40000
         print(j)
 
-        fig, ax = plt.subplots(2, 4)
+        fig, ax = plt.subplots(3, 4)
 
         Ci_loss = Ci_test[j:j + 40000] - Ci_pred[j:j + 40000]
-        Ci_loss_perc = Ci_loss/Ci_test[j:j + 40000]
-        im2 = ax[0, 0].imshow(Ci_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('ocean'), vmin=0, vmax=Ci_max)  # row=0, col=0
-        ax[0, 1].imshow(Ci_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('ocean'), vmin=0, vmax=Ci_max)  # row=0,)  # row=1, col=0
-        ax[0, 2].imshow(Ci_loss.reshape(200, 200),  cmap=plt.get_cmap('OrRd'), vmin=0, vmax=1)  # row=0,)  # row=1, col=0
-        ax[0, 3].imshow(Ci_loss_perc.reshape(200, 200), cmap=plt.get_cmap('OrRd'), vmin=0, vmax=1)  # row=0,)  # row=1, col=0
-        divider2 = make_axes_locatable(ax[0, 1])
+        Ci_loss_perc = Ci_loss/(Ci_test[j:j + 40000])
+        im = ax[0, 0].imshow(Ci_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0, col=0
+        im1 =ax[0, 1].imshow(Ci_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        im2 = ax[0, 2].imshow(Ci_loss.reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        im3 = ax[0, 3].imshow(Ci_loss_perc.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        #im4 = ax[0, 4].imshow(Ci_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+
+        divider = make_axes_locatable(ax[0, 0])
+        cax = divider.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im, cax=cax)
+
+        divider1 = make_axes_locatable(ax[0, 1])
+        cax1 = divider1.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im1, cax=cax1)
+
+        divider2 = make_axes_locatable(ax[0, 2])
         cax2 = divider2.append_axes("right", size="5%", pad=0.1)
         fig.colorbar(im2, cax=cax2)
 
-        Cb_loss = Cb_test[j:j + 40000] - Cb_pred[j:j + 40000]
-        Cb_loss_perc = Cb_loss / Cb_test[j:j + 40000]
-        im3 = ax[1, 0].imshow(Cb_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Cb_max)  # row=0, col=0
-        ax[1, 1].imshow(Cb_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Cb_max)
-        ax[1, 2].imshow(Cb_loss.reshape(200, 200),  cmap=plt.get_cmap('OrRd'), vmin=0, vmax=1)  # row=0,)  # row=1, col=0
-        ax[1, 3].imshow(Cb_loss_perc.reshape(200, 200), cmap=plt.get_cmap('OrRd'), vmin=0,
-                        vmax=1)  # row=0,)  # row=1, col=0
-        divider3 = make_axes_locatable(ax[1,1])
+        divider3 = make_axes_locatable(ax[0, 3])
         cax3 = divider3.append_axes("right", size="5%", pad=0.1)
         fig.colorbar(im3, cax=cax3)
+
+        # divider4 = make_axes_locatable(ax[0, 4])
+        # cax4 = divider4.append_axes("right", size="5%", pad=0.1)
+        # fig.colorbar(im4, cax=cax4)
+
+        Cb_loss = Cb_test[j:j + 40000] - Cb_pred[j:j + 40000]
+        Cb_loss_perc = Cb_loss / (Cb_test[j:j + 40000])
+
+
+        im0 = ax[1, 0].imshow(Cb_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0, col=0
+        im01 = ax[1, 1].imshow(Cb_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))
+        im02 = ax[1, 2].imshow(Cb_loss.reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        im03 = ax[1, 3].imshow(Cb_loss_perc.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        #im04 = ax[1, 4].imshow(Cb_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1,
+
+        divider0 = make_axes_locatable(ax[1, 0])
+        cax0 = divider0.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im0, cax=cax0)
+
+        divider01 = make_axes_locatable(ax[1, 1])
+        cax01 = divider01.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im01, cax=cax01)
+
+        divider02 = make_axes_locatable(ax[1, 2])
+        cax02 = divider02.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im02, cax=cax02)
+
+        divider03 = make_axes_locatable(ax[1, 3])
+        cax03 = divider03.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im03, cax=cax03)
+
+        Ci_loss_sq = np.square(Ci_test[j:j + 40000] - Ci_pred[j:j + 40000])
+        Cb_loss_sq = np.square(Cb_test[j:j + 40000] - Cb_pred[j:j + 40000])
+        CiCb_loss_sq = np.square((Ci_test[j:j + 40000]+Cb_test[j:j + 40000]) - (Ci_pred[j:j + 40000]+Cb_pred[j:j + 40000]))
+        im10 = ax[2, 0].imshow(Ci_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0, col=0
+        im11 = ax[2, 1].imshow(Cb_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))
+        im12 = ax[2, 2].imshow(CiCb_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        #im13 = ax[2, 3].imshow(.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        # im04 = ax[1, 4].imshow(Cb_loss_sq.reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1,
+
+        divider10 = make_axes_locatable(ax[2, 0])
+        cax10 = divider10.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im10, cax=cax10)
+
+        divider11 = make_axes_locatable(ax[2, 1])
+        cax11 = divider11.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im11, cax=cax11)
+
+        divider12 = make_axes_locatable(ax[2, 2])
+        cax12 = divider12.append_axes("right", size="5%", pad=0.1)
+        fig.colorbar(im12, cax=cax12)
+
+        # divider13 = make_axes_locatable(ax[2, 3])
+        # cax13 = divider13.append_axes("right", size="5%", pad=0.1)
+        # fig.colorbar(im13, cax=cax13)
+
+        # divider04 = make_axes_locatable(ax[1, 4])
+        # cax04 = divider04.append_axes("right", size="5%", pad=0.1)
+        # fig.colorbar(im04, cax=cax04)
+
+        # CiCb_loss_sq = np.square((Ci_test[j:j + 40000] + Cb_test[j:j + 40000]), (Ci_pred[j:j + 40000] +Cb_pred[j:j + 40000]))
+        # ax[2, 0].imshow(CiCb_loss_sq[j:j + 40000].reshape(200, 200), cmap=plt.get_cmap('bwr'))  # row=0, col=0
 
         fig.suptitle(f'{j:.1f} ms', fontsize=14)
         ax[0, 0].set_title('Ci test')
         ax[0, 1].set_title('Ci pred')
         ax[0, 2].set_title('Ci loss')
+        ax[0, 3].set_title('Ci loss perc')
+        # ax[0, 4].set_title('Ci loss square')
         ax[0, 0].set_axis_off()
         ax[0, 1].set_axis_off()
         ax[0, 2].set_axis_off()
+        ax[0, 3].set_axis_off()
+        # ax[0, 4].set_axis_off()
 
         ax[1, 0].set_title('Cb test')
         ax[1, 1].set_title('Cb pred')
         ax[1, 2].set_title('Cb loss')
+        ax[1, 3].set_title('Cb loss perc')
+        # ax[1, 4].set_title('Cb loss square')
         ax[1, 0].set_axis_off()
         ax[1, 1].set_axis_off()
         ax[1, 2].set_axis_off()
+        ax[1, 3].set_axis_off()
+        # ax[1, 4].set_axis_off()
 
+        ax[2, 0].set_title('Ci mse')
+        ax[2, 1].set_title('Cb mse')
+        ax[2, 2].set_title('Ci+Cb mse')
+        #ax[2, 3].set_title('eq mse')
+        # ax[1, 4].set_title('Cb loss square')
+        ax[2, 0].set_axis_off()
+        ax[2, 1].set_axis_off()
+        ax[2, 2].set_axis_off()
+        #ax[2, 3].set_axis_off()
         plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=0.5, hspace=0.5)
+        plt.tight_layout()
         plt.show()
 

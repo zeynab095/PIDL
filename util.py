@@ -31,6 +31,11 @@ def mean_squared_error(pred, exact):
         return np.mean(np.square(pred - exact))
     return tf.reduce_mean(tf.square(pred - exact))
 
+def mean_abs_error(pred, exact):
+    if type(pred) is np.ndarray:
+        return np.mean(np.square(pred - exact))
+    return tf.reduce_mean(tf.abs(pred - exact))
+
 
 def fwd_gradients(Y, x):
     dummy = tf.ones_like(Y)
@@ -380,10 +385,10 @@ def PCA_2D(Ci, Cb, t, x, y, kon, koff, R0, D, Lv, Cv, SV):
     # =============================================================================
     e1 = koff * Cb + D * (Ci_xx + Ci_yy) - Ci * Ci_t - kon * Ci * (R0 - Cb) + R0 * (Ci_x + Ci_y) + Lv * (Cv - Ci) * SV
     e2 = kon * Ci * (R0 - Cb) - Cb * Cb_t - koff * Cb
-    #e3 = kon - 1000*koff
+    e3 = kon - 1000*koff
     # =============================================================================
 
-    return e1, e2
+    return e1, e2, e3
 
 
 def PCA_special(kon, koff, Ci, Cb, x, y, t, R0, D, Lv, Cv, SV):

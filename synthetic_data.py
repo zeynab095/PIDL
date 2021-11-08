@@ -7,6 +7,7 @@ Created on Wed Jul 21 14:13:42 2021
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 plt.close("all")
@@ -74,7 +75,7 @@ kon = np.full((nx, ny), 7.7 * 10 ** -1)
 kon[mask] = 7.7
 
 koff = np.full((nx, ny), 7.7 * 10 ** -4)
-koff[mask] = 7.7 * 10 ** -3
+#
 
 R0 = np.random.normal(loc=4.089 * 10 ** -1, scale=8 * 10 ** -2, size=(nx, ny))
 
@@ -125,9 +126,18 @@ def get_data(nsteps, ninterval, u0, u, t0, Cb0, Cb, visualize=False):
             k += 1
             if visualize == True:
                 fig, ax = plt.subplots(1, 2)
-                ax[0].imshow(u.copy(), cmap=plt.get_cmap('hot'), vmin=Tcool, vmax=Thot)
-                ax[1].imshow(Cb.copy(), cmap=plt.get_cmap('hot'), vmin=Tcool, vmax=Thot)
-                ax[0].set_title('{:.1f} ms'.format(m))
+                im = ax[0].imshow(u.copy(), cmap=plt.get_cmap('bwr'))
+                im1 = ax[1].imshow(Cb.copy(), cmap=plt.get_cmap('bwr'))
+                ax[0].set_title('{:.1f} mss'.format(m))
+
+                # divider = make_axes_locatable(ax[0])
+                # cax = divider.append_axes("right", size="5%", pad=0.1)
+                # fig.colorbar(im, cax=cax)
+                #
+                # divider1 = make_axes_locatable(ax[0])
+                # cax1 = divider1.append_axes("right", size="5%", pad=0.1)
+                # fig.colorbar(im1, cax=cax1)
+
             plt.show()
             time_array = np.full((40000, 1), t0)
             single_time = np.column_stack((coordinate_grid[0].reshape(40000, 1), coordinate_grid[1].reshape(40000, 1),

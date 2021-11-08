@@ -55,7 +55,7 @@ class HFM(object):
     def __init__(self, t_data, x_data, y_data, Ci_data, Cb_data,
                  t_eqns, x_eqns, y_eqns,
                  layers, batch_size,
-                 kon, koff, R0, D, Lv, Cv, SV):
+                 kon, koff, kon_const, koff_const, R0, D, Lv, Cv, SV):
 
         # specs
         self.layers = layers
@@ -64,6 +64,8 @@ class HFM(object):
         # flow properties
         self.kon = kon
         self.koff = koff
+        self.kon_const = kon_const
+        self.koff_const = koff_const
         self.R0 = R0
         self.D = D
         self.Lv = Lv
@@ -71,12 +73,12 @@ class HFM(object):
         self.SV = SV
         self.alpha = tf.compat.v1.placeholder(tf.float32, shape=[])
         # data
-        [self.t_data, self.x_data, self.y_data, self.Ci_data, self.Cb_data, self.kon_data, self.koff_data] = [t_data, x_data, y_data, Ci_data, Cb_data, kon, koff]
+        [self.t_data, self.x_data, self.y_data, self.Ci_data, self.Cb_data, self.kon_data, self.koff_data, self.kon_const_data, self.koff_const_data] = [t_data, x_data, y_data, Ci_data, Cb_data, kon, koff, kon_const, koff_const]
         [self.t_eqns, self.x_eqns, self.y_eqns] = [t_eqns, x_eqns, y_eqns]
 
         # placeholders
-        [self.t_data_tf, self.x_data_tf, self.y_data_tf, self.Ci_data_tf, self.Cb_data_tf, self.koff_data_tf, self.kon_data_tf] = [
-            tf.compat.v1.placeholder(tf.float32, shape=[None, 1]) for _ in range(7)]
+        [self.t_data_tf, self.x_data_tf, self.y_data_tf, self.Ci_data_tf, self.Cb_data_tf, self.koff_data_tf, self.kon_data_tf, self.kon_const_data_tf, self.koff_const_data_tf] = [
+            tf.compat.v1.placeholder(tf.float32, shape=[None, 1]) for _ in range(9)]
         [self.t_eqns_tf, self.x_eqns_tf, self.y_eqns_tf] = [tf.compat.v1.placeholder(tf.float32, shape=[None, 1]) for _
                                                             in range(3)]
 
@@ -90,13 +92,13 @@ class HFM(object):
         # self.kon_predf = self.koff_data_pred * alpha + kon_const
         #
         with tf.variable_scope('CiCb'):
-            self.net_cuvp = neural_net(self.t_data, self.x_data, self.y_data, self.kon_data, self.koff_data,
+            self.net_cuvp = neural_net(self.t_data, self.x_data, self.y_data, self.kon_const_data, self.koff_const_data,
                                        layers=self.layers)
             [self.Ci_data_pred, self.Cb_data_pred, *d1] = self.net_cuvp(self.t_data_tf,
                                                                         self.x_data_tf,
                                                                         self.y_data_tf,
-                                                                        self.kon_data_pred,
-                                        self.koff_data_pred)
+                                                                        self.kon_const_data_tf,
+                                        self.koff_const_data_tf)
 
 
 
@@ -104,8 +106,8 @@ class HFM(object):
              self.Cb_eqns_pred] = self.net_cuvp(self.t_eqns_tf,
                                                 self.x_eqns_tf,
                                                 self.y_eqns_tf,
-                                                self.kon_data_pred,
-                                                self.koff_data_pred
+                                                self.kon_const_data_tf,
+                                                self.koff_const_data_tf
                                                 )
 
             [self.e1_eqns_pred,
@@ -124,49 +126,44 @@ class HFM(object):
 
         # print("eq1 loss: ", self.e1_eqns_pred)
         # print("eq2 loss: ", self.e2_eqns_pred)
+        self.loss_eq = mean_squared_error(self.e1_eqns_pred, 0.0) + \
+                       mean_squared_error(self.e2_eqns_pred, 0.0) + \
+                       mean_squared_error(self.e3_eqns_pred, 0.0)
 
-        self.loss = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf)
+        self.loss_kon = mean_squared_error(self.kon_data_pred, self.kon_data_tf)
+        self.loss_koff = mean_squared_error(self.koff_data_pred, self.koff_data_tf)
+
+        self.loss_Ci = mean_squared_error(self.Ci_data_pred, self.Ci_data_tf)
+        self.loss_Cb = mean_squared_error(self.Cb_data_pred, self.Cb_data_tf)
+
+        self.loss_CiCb = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf)
+
+        self.loss = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf) + \
+                    mean_squared_error(self.e1_eqns_pred, 0.0) + \
+                    mean_squared_error(self.e2_eqns_pred, 0.0) + \
+                    mean_squared_error(self.e3_eqns_pred, 0.0)
 
 
-
-        self.loss1 = mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                   mean_squared_error(self.e2_eqns_pred, 0.0) + \
-                     mean_squared_error(self.e3_eqns_pred, 0.0)
-
-        self.loss2 = mean_squared_error(self.Ci_data_pred + self.Cb_data_pred, self.Ci_data_tf + self.Cb_data_tf) + \
-                    1000 * mean_squared_error(self.e1_eqns_pred, 0.0) + \
-                    1000 * mean_squared_error(self.e2_eqns_pred, 0.0) + \
-                    1000 * mean_squared_error(self.e3_eqns_pred, 0.0)
-
-        self.loss3 = mean_squared_error(self.kon_data_pred, self.kon_data_tf) + \
-                     mean_squared_error(self.koff_data_pred, self.koff_data_tf)
-
-        self.loss4 = mean_squared_error(self.Ci_data_pred, self.Ci_data_tf) + \
-                    mean_squared_error(self.Cb_data_pred, self.Cb_data_tf)
 
             # optimizers
 
         self.learning_rate = tf.compat.v1.placeholder(tf.float32, shape=[])
 
-        gen_loss = self.loss
-        fnet_loss = self.loss1
-
-
         print("learnin rate: ", self.learning_rate)
-        # self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        # self.train_op = self.optimizer.minimize(self.loss2)
-        gen_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        fnet_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
-        gen_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='CiCb')
-        fnet_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='konkoff')
-        print("fnet----------------------",len(fnet_tvars))
-
-        gen_grads_and_vars = gen_optimizer.compute_gradients(gen_loss, gen_tvars)
-        fnet_grads_and_vars = fnet_optimizer.compute_gradients(fnet_loss, fnet_tvars)
-
-        gen_train = gen_optimizer.apply_gradients(gen_grads_and_vars)
-        fnet_train = fnet_optimizer.apply_gradients(fnet_grads_and_vars)
-        self.train_op = tf.group(gen_train, fnet_train)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+        self.train_op = self.optimizer.minimize(self.loss)
+        # gen_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+        # fnet_optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+        # gen_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='CiCb')
+        # fnet_tvars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='konkoff')
+        # print("fnet----------------------",len(fnet_tvars))
+        #
+        # gen_grads_and_vars = gen_optimizer.compute_gradients(gen_loss, gen_tvars)
+        # fnet_grads_and_vars = fnet_optimizer.compute_gradients(fnet_loss, fnet_tvars)
+        #
+        # gen_train = gen_optimizer.apply_gradients(gen_grads_and_vars)
+        # fnet_train = fnet_optimizer.apply_gradients(fnet_grads_and_vars)
+        # self.train_op = tf.group(gen_train, fnet_train)
         self.sess = tf_session()
 
     def train(self, total_time, learning_rate, alpha):
@@ -177,7 +174,7 @@ class HFM(object):
         start_time = time.time()
         running_time = 0
         it = 0
-        abc = get_existing_from_ckpt('models/model_eq_C', print_level=2)
+        abc = get_existing_from_ckpt('models_test/model_eq_C2', print_level=2)
         self.sess.run(abc)
 
         while running_time < total_time:
@@ -191,13 +188,18 @@ class HFM(object):
              Ci_data_batch,
              Cb_data_batch,
              kon_data_batch,
-             koff_data_batch) = (self.t_data[idx_data, :],
+             koff_data_batch,
+             kon_const_data_batch,
+             koff_const_data_batch
+             ) = (self.t_data[idx_data, :],
                                self.x_data[idx_data, :],
                                self.y_data[idx_data, :],
                                self.Ci_data[idx_data, :],
                                self.Cb_data[idx_data, :],
                                self.kon_data[idx_data, :],
-                               self.koff_data[idx_data, :])
+                               self.koff_data[idx_data, :],
+                               self.kon_const_data[idx_data, :],
+                               self.koff_const_data[idx_data, :])
 
             (t_eqns_batch,
              x_eqns_batch,
@@ -215,6 +217,8 @@ class HFM(object):
                        self.y_eqns_tf: y_eqns_batch,
                        self.kon_data_tf: kon_data_batch,
                        self.koff_data_tf: koff_data_batch,
+                       self.kon_const_data_tf: kon_const_data_batch,
+                       self.koff_const_data_tf: koff_const_data_batch,
                        self.learning_rate: learning_rate,
                        self.alpha: alpha
                        }
@@ -226,11 +230,11 @@ class HFM(object):
             if it % 10 == 0:
                 elapsed = time.time() - start_time
                 running_time += elapsed / 3600.0
-                [loss_value, loss_value_1, loss_value_2, loss_value_3, loss_value_4,
-                 learning_rate_value] = self.sess.run([self.loss, self.loss1, self.loss2, self.loss3, self.loss4,
-                                                       self.learning_rate], tf_dict)
-                print('It: %d, Loss: %.3e, Loss eq: %.3e, Loss all: %.3e, Loss kon/koff: %.3e, Loss Ci/Cb: %.3e,Time: %.2fs, Running Time: %.2fh, Learning Rate: %.1e'
-                      % (it, loss_value, loss_value_1, loss_value_2, loss_value_3, loss_value_4, elapsed, running_time, learning_rate_value))
+                [loss_value, loss_value_eq, loss_value_kon, loss_value_koff, loss_value_Ci, loss_value_Cb, loss_value_CiCb,
+                 learning_rate_value] = self.sess.run([self.loss, self.loss_eq, self.loss_kon, self.loss_koff, self.loss_Ci, self.loss_Cb,
+                                                       self.loss_CiCb, self.learning_rate], tf_dict)
+                print('It: %d, Loss: %.3e, Loss eq: %.3e, Loss kon: %.3e, Loss koff: %.3e, Loss Ci: %.3e, Loss Cb: %.3e, Loss Ci/Cb: %.3e, Time: %.2fs, Running Time: %.2fh, Learning Rate: %.1e'
+                      % (it, loss_value, loss_value_eq, loss_value_kon, loss_value_koff, loss_value_Ci, loss_value_Cb, loss_value_CiCb, elapsed, running_time, learning_rate_value))
                 sys.stdout.flush()
                 start_time = time.time()
             it += 1
@@ -240,17 +244,17 @@ class HFM(object):
         # model_var_list = tf.get_collection(tfflag, scope='generator') + tf.get_collection(tfflag, scope='fnet')
         # assign_ops = get_existing_from_ckpt(FLAGS.checkpoint, model_var_list, rest_zero=True, print_level=1)
         #saver = tf.train.import_meta_graph('models/my-model15.meta')
-        abc = get_existing_from_ckpt('models/model_eq_C', print_level=2)
+        abc = get_existing_from_ckpt('models_test/model_eq_C2', print_level=2)
         self.sess.run(abc)
 
-    def predict(self, t_star, x_star, y_star):
+    def predict(self, t_star, x_star, y_star, kon_const_star, koff_const_star):
 
         tf_dict_k = {self.x_data_tf: x_star, self.y_data_tf: y_star}
         kon_star = self.sess.run(self.kon_data_pred, tf_dict_k)
         koff_star = self.sess.run(self.koff_data_pred, tf_dict_k)
 
-        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star, self.kon_data_tf: kon_star,
-                   self.koff_data_tf: koff_star}
+        tf_dict = {self.t_data_tf: t_star, self.x_data_tf: x_star, self.y_data_tf: y_star, self.kon_const_data_tf: kon_const_star,
+                   self.koff_const_data_tf: koff_const_star}
 
         Ci_star = self.sess.run(self.Ci_data_pred, tf_dict)
         Cb_star = self.sess.run(self.Cb_data_pred, tf_dict)
@@ -285,6 +289,8 @@ def start_train():
     y, x = np.ogrid[-center_x:nx - center_x, -center_y:ny - center_y]
     mask = x * x + y * y <= radius * radius
 
+    kon_const = np.full((nx, ny), 7.7 * 10 ** -1)
+    koff_const = np.full((nx, ny), 7.7 * 10 ** -4)
     kon = np.full((nx, ny), 7.7 * 10 ** -1)
     kon[mask] = 7.7
 
@@ -294,8 +300,14 @@ def start_train():
     kon = kon.reshape(40000, 1)
     koff = koff.reshape(40000, 1)
 
+    kon_const = kon_const.reshape(40000, 1)
+    koff_const = koff_const.reshape(40000, 1)
+
     kon_train = np.tile(kon, train_n).flatten(order='F').reshape(num_items, 1)
     koff_train = np.tile(koff, train_n).flatten(order='F').reshape(num_items, 1)
+
+    kon_const_train = np.tile(kon_const, train_n).flatten(order='F').reshape(num_items, 1)
+    koff_const_train = np.tile(koff_const, train_n).flatten(order='F').reshape(num_items, 1)
 
 
     print("shape: ", np_input_array.shape)
@@ -332,10 +344,10 @@ def start_train():
     model = HFM(t_data, x_data, y_data, Ci_data, Cb_data,
                 t_eqns, x_eqns, y_eqns,
                 layers, batch_size,
-                kon_train, koff_train, R0, D, Lv, Cv, SV)
+                kon_train, koff_train, kon_const_train, koff_const_train, R0, D, Lv, Cv, SV)
     #model.restore()
     # # =============================================================================
-    model.train(total_time=0.4, learning_rate=1e-3, alpha=0)
+    model.train(total_time=0.7, learning_rate=1e-3, alpha=0)
     # # =============================================================================
     time_steps_test = 600
     time_interval_test = 50
@@ -365,11 +377,14 @@ def start_train():
     print("koff data max: ", koff_data_test.max())
     print("koff data min: ", koff_data_test.min())
 
+    test_n = int(time_steps_test / time_interval_test)
+    kon_const_test = np.tile(kon_const, test_n).flatten(order='F').reshape(num_items_test, 1)
+    koff_const_test = np.tile(koff_const, test_n).flatten(order='F').reshape(num_items_test, 1)
 
 
 
     # Prediction
-    Ci_pred, Cb_pred, kon_pred, koff_pred = model.predict(t_test, x_test, y_test)
+    Ci_pred, Cb_pred, kon_pred, koff_pred = model.predict(t_test, x_test, y_test, kon_const_test, koff_const_test)
 
     print("cb pred max: ", Cb_pred.max())
     print("cb pred min: ", Cb_pred.min())
@@ -416,8 +431,8 @@ def start_train():
     kon_min = kon_data_test.min() - 0.1
     koff_max = koff_data_test.max()+0.001
     koff_min = koff_data_test.min()-0.001
-    Ci_max = Ci_test.max()+0.2
-    Cb_max = Cb_test.max()+0.2
+    Ci_max = Ci_test.max()+0.1
+    Cb_max = Cb_test.max()+0.1
 
 
     for i in range(test_n):
@@ -481,16 +496,16 @@ def start_train():
         fig.colorbar(im1, cax=cax1)
 
         Ci_loss = (Ci_test[j:j + 40000] - Ci_pred[j:j + 40000])/Ci_test[j:j + 40000]
-        im2 = ax[2, 0].imshow(Ci_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0, col=0
-        ax[2, 1].imshow(Ci_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
+        im2 = ax[2, 0].imshow(Ci_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Ci_max)  # row=0, col=0
+        ax[2, 1].imshow(Ci_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Ci_max)  # row=0,)  # row=1, col=0
         ax[2, 2].imshow(Ci_loss.reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
         divider2 = make_axes_locatable(ax[2, 1])
         cax2 = divider2.append_axes("right", size="5%", pad=0.1)
         fig.colorbar(im2, cax=cax2)
 
         Cb_loss = (Cb_test[j:j + 40000] - Cb_pred[j:j + 40000])/Cb_test[j:j + 40000]
-        im3 = ax[3, 0].imshow(Cb_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0, col=0
-        ax[3, 1].imshow(Cb_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'))
+        im3 = ax[3, 0].imshow(Cb_test[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Cb_max)  # row=0, col=0
+        ax[3, 1].imshow(Cb_pred[j:j + 40000].reshape(200, 200),  cmap=plt.get_cmap('bwr'), vmin=0, vmax=Cb_max)
         ax[3, 2].imshow(Cb_loss.reshape(200, 200),  cmap=plt.get_cmap('bwr'))  # row=0,)  # row=1, col=0
         divider3 = make_axes_locatable(ax[3,1])
         cax3 = divider3.append_axes("right", size="5%", pad=0.1)
